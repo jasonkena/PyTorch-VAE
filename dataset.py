@@ -1,4 +1,5 @@
 import os
+import numpy as np
 import torch
 from torch import Tensor
 from pathlib import Path
@@ -10,18 +11,45 @@ from torchvision import transforms
 from torchvision.datasets import CelebA
 import zipfile
 
+import glob
+import h5py
 
 # Add your custom dataset class here
-class MyDataset(Dataset):
-    def __init__(self):
-        pass
-    
-    
+class VesicleDataset(Dataset):
+    def __init__(self, transforms):
+        base_path = "/mmfs1/data/bccv/dataset/xiaomeng/ves"
+        h5s = sorted(glob.glob(os.path.join(base_path, "*_patch.h5")))
+        vols = []
+        for h5 in h5s:
+            with h5py.File(h5, "r") as f:
+                vols.append(f["main"][:])
+        vols = np.concatenate(vols, axis=0)
+        self.vols = vols
+        self.transforms = transforms
+
     def __len__(self):
-        pass
+        return self.vols.shape[0]
     
     def __getitem__(self, idx):
-        pass
+        img = self.vols[idx].astype(np.float32) / 255
+        img = torch.from_numpy(img).reshape(1, img.shape[0], img.shape[1])
+        img = self.transforms(img)
+        return img, 0.0
+
+def dataset_with_indices(cls):
+    # https://discuss.pytorch.org/t/how-to-retrieve-the-sample-indices-of-a-mini-batch/7948/19
+    """
+    Modifies the given Dataset class to return a tuple data, target, index
+    instead of just data, target.
+    """
+
+    def __getitem__(self, index):
+        data, target = cls.__getitem__(self, index)
+        return data, target, index
+
+    return type(cls.__name__, (cls,), {
+        '__getitem__': __getitem__,
+    })
 
 
 class MyCelebA(CelebA):
@@ -97,7 +125,7 @@ class VAEDataset(LightningDataModule):
         self.num_workers = num_workers
         self.pin_memory = pin_memory
 
-    def setup(self, stage: Optional[str] = None) -> None:
+    def setup(self, stage: Optional[str] = None, return_indices = False) -> None:
 #       =========================  OxfordPets Dataset  =========================
             
 #         train_transforms = transforms.Compose([transforms.RandomHorizontalFlip(),
@@ -126,30 +154,24 @@ class VAEDataset(LightningDataModule):
         
 #       =========================  CelebA Dataset  =========================
     
-        train_transforms = transforms.Compose([transforms.RandomHorizontalFlip(),
-                                              transforms.CenterCrop(148),
-                                              transforms.Resize(self.patch_size),
-                                              transforms.ToTensor(),])
+        # train_transforms = transforms.Compose([transforms.RandomHorizontalFlip(),
+        #                                       transforms.CenterCrop(148),
+        #                                       transforms.Resize(self.patch_size),
+        #                                       transforms.ToTensor(),])
+        # 
+        # val_transforms = transforms.Compose([transforms.RandomHorizontalFlip(),
+        #                                     transforms.CenterCrop(148),
+        #                                     transforms.Resize(self.patch_size),
+        #                                     transforms.ToTensor(),])
+
+        train_transforms = transforms.Compose([transforms.RandomHorizontalFlip(),transforms.RandomVerticalFlip(),transforms.Resize((16,16))])
         
-        val_transforms = transforms.Compose([transforms.RandomHorizontalFlip(),
-                                            transforms.CenterCrop(148),
-                                            transforms.Resize(self.patch_size),
-                                            transforms.ToTensor(),])
-        
-        self.train_dataset = MyCelebA(
-            self.data_dir,
-            split='train',
-            transform=train_transforms,
-            download=False,
-        )
-        
-        # Replace CelebA with your dataset
-        self.val_dataset = MyCelebA(
-            self.data_dir,
-            split='test',
-            transform=val_transforms,
-            download=False,
-        )
+        if return_indices:
+            self.train_dataset = dataset_with_indices(VesicleDataset)(train_transforms)
+        else:
+            self.train_dataset = VesicleDataset(train_transforms)
+        self.val_dataset = self.train_dataset
+
 #       ===============================================================
         
     def train_dataloader(self) -> DataLoader:
